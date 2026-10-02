@@ -1,0 +1,14 @@
+[repo]
+name = "history"
+kind = "plugin"
+lang = "lua/ts"
+role = "candidate opt-in history policy plugin; metadata-only scaffold"
+owner = "bitty-plugins"
+docs = "bitty-plugins-docs"
+
+[bootstrap]
+version = "0.0.1"
+status = "metadata-only; not onboarded"
+
+[contracts]
+status = "pending W-131/W-137"

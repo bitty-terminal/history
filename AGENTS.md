@@ -1,0 +1,5 @@
+# History repository guidance
+
+Metadata-only plugin candidate; no implementation/onboarding authorized. Read TODO, repo.toml, CarryCtx, W-131/W-137 and shared security corpus. Separate opt-in command history and transcript capture; no raw stdout persistence by default. Specify privacy, retention/deletion, compression/recovery and authority. OSC133 does not prove command/cwd. Atuin uses supported CLI/API, not private database.
+
+English only; no hardcoded host values. Start at 0.0.1; Bun owns JS. Run just gates; scaffold checks are not behavior evidence. CTX-0001 -> 0002 -> 0003 -> 0004 orders bootstrap/contracts/implementation/independent verification. Named sessions, narrow scopes, managed hooks, task worktrees after first commit. Direct bootstrap authorized, not self-review. No commit/push/release without authority; redacted snapshots only. Preserve unrelated registry pins; no silent installs, destructive cleanup or unowned process kills. Public capability APIs, negative privacy tests and docs synchronization gate onboarding.
