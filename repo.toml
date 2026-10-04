@@ -11,4 +11,4 @@ version = "0.0.1"
 status = "metadata-only; not onboarded"
 
 [contracts]
-status = "pending W-131/W-137"
+status = "RFC-0004 accepted + threat-model 48b60c4 + W-131 accepted (bitty-docs 21d63dc) + W-137 accepted (bitty-plugins-docs 002c7ce) + Core host 76fa42d6; SDK PR #144 pending; CTX-0002 accepted; CTX-0003 authorized, CTX-0004 verification pending"
