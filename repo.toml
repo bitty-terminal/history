@@ -2,13 +2,13 @@
 name = "history"
 kind = "plugin"
 lang = "lua/ts"
-role = "candidate opt-in history policy plugin; metadata-only scaffold"
+role = "candidate opt-in history policy plugin; CTX-0003 implementation in review"
 owner = "bitty-plugins"
 docs = "bitty-plugins-docs"
 
 [bootstrap]
 version = "0.0.1"
-status = "metadata-only; not onboarded"
+status = "implementation in review; not onboarded"
 
 [contracts]
-status = "RFC-0004 accepted + threat-model 48b60c4 + W-131 accepted (bitty-docs 21d63dc) + W-137 accepted (bitty-plugins-docs 002c7ce) + Core host 76fa42d6; SDK PR #144 pending; CTX-0002 accepted; CTX-0003 authorized, CTX-0004 verification pending"
+status = "RFC-0004 accepted + threat-model 48b60c4 + W-131 accepted (bitty-docs 21d63dc) + W-137 accepted (bitty-plugins-docs 002c7ce) + Core host 76fa42d6; SDK PR #144 OPEN pinned to head 0a9487f (derivation aid, not basis); CTX-0002 accepted; CTX-0003 in review, CTX-0004 verification pending"

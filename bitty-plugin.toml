@@ -1,0 +1,68 @@
+# Bitty plugin manifest for the History keeper (bitty-terminal.history).
+#
+# W-137 S-3 (CTX-0003) public-API-only policy package over the accepted
+# RFC-0004/W-131/W-137 contracts. The plugin consumes exactly three additive
+# v2 capabilities and no private surface: `history.transcript.read`
+# (scoped snapshot reads over sealed transcript segments while opt-in
+# capture holds), `history.commands.read` (scoped list/search/tail reads
+# over command history), and `history.kv.read` (own-namespace KV snapshot
+# reads under the published quota ceilings). It requests no filesystem,
+# process-spawn, network, clipboard, terminal-input, or selection-copy
+# authority: per RFC-0004 grant-combination rule, reading authorizes
+# delivery into the plugin VM only, and export (clipboard/files/process)
+# stays a separately granted authority outside this family. No
+# session-snapshot access exists: save/restore stays Core-only per W-137,
+# and `session`/`snapshot` sources fail closed.
+#
+# `just manifest` validates this file with the authoritative `bitty-plugin-lint`
+# from bitty-plugin-sdk (R-SDK-2), pinned by commit in `package.json` and
+# `bun.lock`. Run `just install` once to materialize it.
+#
+# SDK pin note: bitty-plugin-sdk PR #144 (CTX-0066 history/search/selection
+# surface) is OPEN at the time of this plugin task, so `package.json` pins
+# its worktree head SHA 0a9487f6c6f47ea0e3cadc9b710e7b1150485822 (not a
+# merged release). The pin is derivation evidence only; the accepted basis
+# is RFC-0004 + W-131 + W-137 + Core host 76fa42d6, never the open SDK PR.
+
+[plugin]
+id = "bitty-terminal.history"
+name = "History"
+version = "0.0.1"
+description = "Opt-in history policy over the public history-read host APIs: scoped bounded snapshot queries over transcript, commands, and own KV with redacted truncated attributed answers or typed denials. Never streams, never touches session snapshots."
+license = "MIT"
+
+[compat]
+# Application and Plugin API ranges. Both are syntax-validated here and
+# resolved by the host at install time. The host validates compatibility
+# before activation and fails closed (disable with a diagnostic, no partial
+# activation) on mismatch.
+bitty = ">=0.5,<1.0"
+plugin-api = "^1.0"
+
+[capabilities]
+# Deny by default; each capability is requested one by one. This is the exact
+# public set the RFC-0004 family proposes for this keeper; nothing else is
+# declared or used.
+# - history.transcript.read: scoped snapshot reads over sealed transcript
+#   segments while opt-in capture holds (RFC-0004 source table).
+# - history.commands.read: scoped list, search, and tail reads over command
+#   history with explicit scope and result bound.
+# - history.kv.read: reads of the plugin's own KV namespace only under the
+#   published quota ceilings; cross-plugin reads are unrepresentable.
+# No export capability (clipboard.write, fs, process) is declared: the
+# history grant never implies export per the RFC-0004 grant-combination
+# rule, and session snapshots are never a queryable source per W-137.
+history.transcript.read = true
+history.commands.read = true
+history.kv.read = true
+
+[lazy]
+# Static triggers let the host register the plugin without creating a VM.
+# Commands are plugin-qualified: `<plugin-id>:<resource>`. Each command is a
+# one-shot bounded snapshot query over already-persisted state under its
+# per-source grant; there is no streaming, watch, or tail-follow semantic.
+commands = [
+  "bitty-terminal.history:query-transcript",
+  "bitty-terminal.history:query-commands",
+  "bitty-terminal.history:query-kv",
+]
