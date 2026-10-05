@@ -30,6 +30,10 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { MockHost } from "bitty-plugin-sdk";
 
@@ -40,6 +44,78 @@ import {
   MANIFEST_SOURCE,
   type HistoryRun,
 } from "./harness.js";
+
+/**
+ * Fail-soft gate: the committed fixture (`live-host-matrix.json`) carries
+ * the live-host evidence, so every parity assertion below runs hermetic
+ * without a Core checkout. The probe below still resolves Core via
+ * BITTY_WORKSPACE (or the relative workspace fallback, never a hardcoded
+ * path) and skips with an explicit notice when no checkout is present —
+ * unblocking the plugins CI job (bitty-terminal/bitty-plugins#73) which has
+ * no `bitty` alongside. With BITTY_WORKSPACE pointed at a real workspace the
+ * probe executes (proves the skip never masks a real run).
+ */
+const HERE = fileURLToPath(new URL(".", import.meta.url));
+const REPO_ROOT = dirname(HERE);
+
+function workspaceRoot(): string {
+  const fromEnv = process.env.BITTY_WORKSPACE;
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+  return resolve(REPO_ROOT, "..", "..", "..", "..", "..");
+}
+
+function coreFile(...parts: string[]): string {
+  return join(workspaceRoot(), "bitty", ...parts);
+}
+
+function coreExists(path: string): boolean {
+  try {
+    return existsSync(coreFile(path));
+  } catch {
+    return false;
+  }
+}
+
+function coreDir(): string {
+  return coreFile("");
+}
+
+function freshExists(path: string): boolean {
+  const rel = path.split("/").join("/");
+  try {
+    execFileSync(
+      "git",
+      ["-C", coreDir(), "cat-file", "-e", `origin/main:${rel}`],
+      { stdio: "ignore" },
+    );
+    return true;
+  } catch {
+    return coreExists(path);
+  }
+}
+
+const HISTORY_READ = join(
+  "crates",
+  "bitty-plugin-host",
+  "src",
+  "history_read.rs",
+);
+
+const CORE_PRESENT = freshExists(HISTORY_READ);
+
+if (!CORE_PRESENT) {
+  console.log(
+    `live Core not present at ${coreDir()} ` +
+      `(BITTY_WORKSPACE=${process.env.BITTY_WORKSPACE ?? "(unset, relative fallback)"}); ` +
+      `skipping live-identity probe, fixture-pinned assertions still run`,
+  );
+}
+
+describe.skipIf(!CORE_PRESENT)("live Core presence (fail-soft probe)", () => {
+  test("Core history-read gate exists at the pinned surface", () => {
+    expect(freshExists(HISTORY_READ)).toBe(true);
+  });
+});
 
 interface LiveOutcome {
   readonly status: string;
