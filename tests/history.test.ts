@@ -80,6 +80,18 @@ describe("manifest", () => {
     );
   });
 
+  test("declares exactly the bounded-default settings keys", () => {
+    const section = MANIFEST_SOURCE.split("[settings]")[1]?.split("[")[0] ?? "";
+    const keys = section
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"))
+      .map((line) => line.split("=")[0]?.trim() ?? "");
+    expect(keys.sort()).toEqual(
+      ["default_panel", "default_workspace", "max_bytes", "row_count"].sort(),
+    );
+  });
+
   test("declares exactly the public history-read set and no export grant", () => {
     expect([...HISTORY_CAPABILITIES].sort()).toEqual(
       [
@@ -433,6 +445,109 @@ describe("scoped bounded snapshots with typed denials", () => {
   });
 });
 
+describe("bounded default context for argument-free dispatch", () => {
+  const PANEL_ROWS = [
+    { panel: "pane-a", workspace: "ws-1", seq: 0, body: "default line one" },
+    { panel: "pane-a", workspace: "ws-1", seq: 1, body: "default line two" },
+    { panel: "pane-b", workspace: "ws-1", seq: 2, body: "foreign line" },
+  ];
+
+  async function seeded(): Promise<HistoryRun> {
+    const run = await history();
+    run.host.setHistoryCapture("transcript", true);
+    run.host.setHistoryRows("transcript", PANEL_ROWS);
+    return run;
+  }
+
+  test("empty-args keybinding dispatch resolves the bounded default context", async () => {
+    const run = await seeded();
+    // The host context a keybinding can rely on is the declared settings
+    // namespace: no focus getter exists without a capability this plugin does
+    // not request (and must not widen into).
+    run.host.bitty.settings.set("default_panel", "pane-a");
+    run.host.bitty.settings.set("default_workspace", "ws-1");
+    const result = dispatch(run, TRANSCRIPT_COMMAND, {}) as {
+      ok: boolean;
+      code: string;
+    };
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("ok");
+    expect(await lastCode(run)).toBe("ok");
+    expect(await recordCount(run)).toBe(2);
+    expect(await recordBody(run, 1)).toBe("default line one");
+    expect(await recordBody(run, 2)).toBe("default line two");
+  });
+
+  test("an explicit scope still wins over the bounded default", async () => {
+    const run = await seeded();
+    run.host.bitty.settings.set("default_panel", "pane-b");
+    const result = dispatch(run, TRANSCRIPT_COMMAND, {
+      scope: { panel: "pane-a" },
+      row_count: 4,
+      max_bytes: 4096,
+      op: "list",
+    }) as { ok: boolean; code: string };
+    expect(result.ok).toBe(true);
+    expect(await recordCount(run)).toBe(2);
+    expect(await recordBody(run, 1)).toBe("default line one");
+  });
+
+  test("no bounded context keeps the typed scope-mismatch denial", async () => {
+    const run = await seeded();
+    const result = dispatch(run, TRANSCRIPT_COMMAND, {}) as {
+      ok: boolean;
+      code: string;
+    };
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("E_HISTORY_SCOPE_MISMATCH");
+    expect(await lastCode(run)).toBe("E_HISTORY_SCOPE_MISMATCH");
+    expect(await recordCount(run)).toBe(0);
+  });
+
+  test("a malformed default fails closed as E_DEF_INVALID", async () => {
+    const run = await seeded();
+    run.host.bitty.settings.set("default_panel", "*");
+    const result = dispatch(run, TRANSCRIPT_COMMAND, {}) as {
+      ok: boolean;
+      code: string;
+    };
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("E_DEF_INVALID");
+  });
+
+  test("default bounds stay inside the accepted caps and never clamp explicit ones", async () => {
+    const run = await history();
+    run.host.setHistoryCapture("transcript", true);
+    run.host.setHistoryRows(
+      "transcript",
+      Array.from({ length: 20 }, (_, seq) => ({
+        panel: "pane-a",
+        workspace: "ws-1",
+        seq,
+        body: `line ${seq}`,
+      })),
+    );
+    run.host.bitty.settings.set("default_panel", "pane-a");
+    // An out-of-window configured default falls back to the shipped cap.
+    run.host.bitty.settings.set("row_count", 99);
+    let result = dispatch(run, TRANSCRIPT_COMMAND, {}) as {
+      ok: boolean;
+      code: string;
+    };
+    expect(result.ok).toBe(true);
+    expect(await recordCount(run)).toBe(16);
+    // An explicit over-bound request still denies; defaults never clamp it.
+    result = dispatch(run, TRANSCRIPT_COMMAND, {
+      scope: { panel: "pane-a" },
+      row_count: 99,
+      max_bytes: 4096,
+      op: "list",
+    }) as { ok: boolean; code: string };
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("E_HISTORY_OVER_BOUND");
+  });
+});
+
 describe("commands are one-shot snapshots, never streams", () => {
   test("the three query commands dispatch and return typed ok/code", async () => {
     const run = await history();
@@ -488,7 +603,7 @@ describe("commands are one-shot snapshots, never streams", () => {
       [...code.matchAll(/bitty\.([A-Za-z_]+)/g)].map((m) => m[1]),
     );
     for (const ns of namespaces) {
-      expect(["api_version", "commands", "history"]).toContain(ns);
+      expect(["api_version", "commands", "history", "settings"]).toContain(ns);
     }
     expect(code).not.toMatch(/bitty\.terminal/);
     expect(code).not.toMatch(/bitty\.selection/);
