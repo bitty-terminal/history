@@ -36,7 +36,7 @@ license = "MIT"
 # resolved by the host at install time. The host validates compatibility
 # before activation and fails closed (disable with a diagnostic, no partial
 # activation) on mismatch.
-bitty = ">=0.5,<1.0"
+bitty = ">=0.0.24,<0.1"
 plugin-api = "^1.0"
 
 [capabilities]
