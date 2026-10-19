@@ -9,10 +9,9 @@
 # package.json and are locked in bun.lock; `just install` materializes them.
 # Every gate below runs offline once install has completed.
 #
-# SDK pin note: bitty-plugin-sdk PR #144 (CTX-0066) is OPEN, so package.json
-# pins its worktree head SHA 0a9487f6c6f47ea0e3cadc9b710e7b1150485822 (not a
-# merged release). The accepted basis is RFC-0004 + W-131 + W-137 + Core
-# host 76fa42d6, never the open SDK PR.
+# SDK pin note: `package.json` pins merged `main` commit `3ea8e58` (history
+# surface from PR #144 plus declared-settings lint/mock support from PR #152).
+# The accepted basis is RFC-0004 + W-131 + W-137 + Core host 76fa42d6.
 prettier_version := "3.9.6"
 markdownlint_version := "0.23.1"
 actionlint_version := "1.7.12"

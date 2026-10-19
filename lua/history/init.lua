@@ -69,6 +69,29 @@ M.FRESHNESS = "point-in-time-no-guarantee"
 -- Queryable sources; session snapshots are never a source.
 M.SOURCES = { "transcript", "commands", "kv" }
 
+-- Bounded default context (command path). A keybinding dispatches a command
+-- with no arguments, and an empty table carries no scope and no bounds. The
+-- public Lua surface exposes no focus getter: resolving the focused
+-- panel/workspace through `workspace.list` or `panel.*` would require
+-- `workspace.read`/`panel.focus`, a capability widening this package must not
+-- take. The sanctioned, capability-neutral host context is the plugin's
+-- declared settings namespace (`[settings]` in the manifest), which the host
+-- resolves per generation and the plugin reads per query. Explicit arguments
+-- always win; defaults are convenience values, never authority, and the host
+-- still intersects every query scope with the granted scope.
+M.SETTING_DEFAULT_PANEL = "default_panel"
+M.SETTING_DEFAULT_WORKSPACE = "default_workspace"
+M.SETTING_ROW_COUNT = "row_count"
+M.SETTING_MAX_BYTES = "max_bytes"
+
+-- Shipped bounds for an argument-free query: the accepted per-query caps, so
+-- an empty dispatch returns the widest page the host allows and never more.
+-- Configured defaults are accepted only inside the same 1..cap window; a
+-- value outside it falls back to these shipped values (a local default is
+-- never allowed to turn into an over-bound request the host must deny).
+M.DEFAULT_ROW_COUNT = M.MAX_ROWS_PER_QUERY
+M.DEFAULT_MAX_BYTES = M.MAX_BYTES_PER_QUERY
+
 -- Not-open/disabled sentinels surfaced through the scalar queries below.
 M.CODE_DISABLED = "E_DISABLED"
 M.CODE_NO_HOST = "NO_HOST"
@@ -317,6 +340,105 @@ local function has_host()
   return bitty ~= nil
 end
 
+-- Reads one declared setting from the host's plugin settings namespace.
+-- Absent host, absent settings bridge, a denied read, or a nil/absent value
+-- all yield nil: bounded defaults are convenience values, never authority,
+-- and a settings problem must not abort a query or activation. The host (and
+-- the SDK mock) already filter undeclared keys and wrong-typed values.
+local function setting_value(key)
+  if not has_host() or bitty.settings == nil then
+    return nil
+  end
+  local ok, value = pcall(bitty.settings.get, key)
+  if not ok then
+    return nil
+  end
+  return value
+end
+
+-- Validates one default scope axis. Returns value or nil, plus a code and
+-- reason on a malformed default. An empty string means "no bound context"
+-- (the shipped manifest default), never a wildcard.
+local function default_scope_axis(axis, value)
+  if value == nil then
+    return nil, nil, nil
+  end
+  if type(value) ~= "string" then
+    return nil, "E_DEF_INVALID", "default scope." .. axis .. " must be a string"
+  end
+  if value == "" then
+    return nil, nil, nil
+  end
+  if bad_scope_id(value) then
+    return nil, "E_DEF_INVALID",
+      "default scope." .. axis .. " must be 1..128 non-blank bytes, never '*' or 'all'"
+  end
+  return value, nil, nil
+end
+
+-- Resolves the scope for one query. Explicit args win unchanged (the caller
+-- may name one axis, both, or malformed values; the unchanged validator and
+-- the host remain authoritative). Only when neither axis is named does the
+-- declared settings context supply the bounded default, and only when that
+-- context yields at least one valid axis; otherwise the typed scope-mismatch
+-- denial is preserved. KV has no extent to resolve: the caller namespace is
+-- the scope, and panel/workspace defaults never apply.
+function M.resolve_scope(source, scope)
+  local explicit = normalize_scope_value(scope)
+  if explicit ~= nil then
+    if type(explicit) ~= "table" then
+      -- Malformed shape: hand it to the unchanged validator.
+      return explicit, nil, nil
+    end
+    if explicit.panel ~= nil or explicit.workspace ~= nil then
+      return explicit, nil, nil
+    end
+  end
+  if source == "kv" then
+    return explicit or {}, nil, nil
+  end
+  local panel, pcode, preason =
+    default_scope_axis("panel", setting_value(M.SETTING_DEFAULT_PANEL))
+  if panel == nil and pcode ~= nil then
+    return nil, pcode, preason
+  end
+  local workspace, wcode, wreason =
+    default_scope_axis("workspace", setting_value(M.SETTING_DEFAULT_WORKSPACE))
+  if workspace == nil and wcode ~= nil then
+    return nil, wcode, wreason
+  end
+  if panel == nil and workspace == nil then
+    return nil, "E_HISTORY_SCOPE_MISMATCH",
+      "history query scope names no panel or workspace extent and no bounded default context is configured"
+  end
+  return { panel = panel, workspace = workspace }, nil, nil
+end
+
+-- Applies the bounded-default row/byte window when a bound is absent. An
+-- explicit bound travels through unchanged so the validator/host still deny
+-- over-bound requests (never clamped). A configured default outside the
+-- accepted 1..cap window falls back to the shipped cap, so a local default
+-- can never become an over-bound request.
+local function bounded_default(value, key, shipped, cap)
+  if value ~= nil then
+    return value
+  end
+  local configured = setting_value(key)
+  if type(configured) == "number" and math.floor(configured) == configured
+      and configured >= 1 and configured <= cap then
+    return configured
+  end
+  return shipped
+end
+
+function M.resolve_bounds(opts)
+  local row_count = bounded_default(
+    opts.row_count, M.SETTING_ROW_COUNT, M.DEFAULT_ROW_COUNT, M.MAX_ROWS_PER_QUERY)
+  local max_bytes = bounded_default(
+    opts.max_bytes, M.SETTING_MAX_BYTES, M.DEFAULT_MAX_BYTES, M.MAX_BYTES_PER_QUERY)
+  return row_count, max_bytes
+end
+
 -- Extracts the E_* host code from a pcall error for typed diagnostics.
 local function host_code(err)
   local text = tostring(err)
@@ -462,7 +584,28 @@ function M.query(source, opts)
     note("E_DEF_INVALID", "unknown history source '" .. tostring(source) .. "'")
     return false, state.last_code
   end
-  local norm, code, reason = M.validate_query(source, opts)
+  -- An empty dispatch (keybinding/palette) carries no scope and no bounds.
+  -- Resolve the bounded default context before validation; explicit scope and
+  -- explicit bounds still take the unchanged path and the host stays
+  -- authoritative for every grant/scope/rate decision.
+  local normalized = opts
+  if normalized == nil then
+    normalized = {}
+  elseif type(normalized) ~= "table" then
+    normalized = normalize_opts_value(normalized)
+  end
+  if type(normalized) == "table" then
+    local resolved, scode, sreason = M.resolve_scope(source, normalized.scope)
+    if resolved == nil then
+      note(scode, sreason)
+      return false, state.last_code
+    end
+    normalized.scope = resolved
+    local rows, bytes = M.resolve_bounds(normalized)
+    normalized.row_count = rows
+    normalized.max_bytes = bytes
+  end
+  local norm, code, reason = M.validate_query(source, normalized)
   if norm == nil then
     note(code, reason)
     return false, state.last_code

@@ -4,16 +4,19 @@ W-137 S-3 (CTX-0003) Lua policy package for the Bitty history keeper:
 opt-in history reads over the public host API only. Accepted contracts are
 RFC-0004 (history-read surface, bitty-docs), W-131 (storage-and-history
 boundary, bitty-docs), and W-137 (plugin history-and-storage policy,
-bitty-plugins-docs); the SDK binding is bitty-plugin-sdk at `0a9487f`
-(PR #144 head, OPEN — pinned derivation aid, not the accepted basis).
+bitty-plugins-docs); the SDK binding is bitty-plugin-sdk at `3ea8e58`
+(merged `main`: history surface from PR #144, declared-settings support from
+PR #152).
 
 ## Scope
 
 - `bitty-plugin.toml`: plugin id `bitty-terminal.history`, version `0.0.1`,
-  compat `bitty >=0.5,<1.0` with `plugin-api ^1.0`, exactly three
+  compat `bitty >=0.0.24,<0.1` with `plugin-api ^1.0`, exactly three
   capabilities (`history.transcript.read`, `history.commands.read`,
   `history.kv.read`), lazy `query-transcript`/`query-commands`/`query-kv`
-  commands and no event subscriptions. No export capability: per the
+  commands, no event subscriptions, and four declared settings
+  (`default_panel`, `default_workspace`, `row_count`, `max_bytes`) that supply
+  capability-neutral bounded defaults. No export capability: per the
   RFC-0004 grant-combination rule the history grant never implies
   clipboard, filesystem, or process authority.
 - `lua/history/init.lua`: the whole policy. Source/scope/bound validation
@@ -26,8 +29,10 @@ bitty-plugins-docs); the SDK binding is bitty-plugin-sdk at `0a9487f`
   composer harness pattern. Covers scoped snapshots with typed denials,
   source isolation, tail/search ops, over-bound denials, purge/expiry as
   typed unavailability, safe-mode and trust denials, revoked-vs-missing
-  distinction, one-shot command dispatch, mismatch disable, denial parity
-  vs a foreign manifest, and oracle-tight denial texts.
+  distinction, one-shot command dispatch, argument-free keybinding dispatch
+  with bounded defaults (explicit-scope precedence and the no-context
+  denial), mismatch disable, denial parity vs a foreign manifest, and
+  oracle-tight denial texts.
 
 ## Rules
 
@@ -38,6 +43,19 @@ bitty-plugins-docs); the SDK binding is bitty-plugin-sdk at `0a9487f`
   panel and/or workspace extent (never `*` or `all`), KV takes no extent;
   every query carries explicit `row_count`/`max_bytes` over zero.
   Over-bound requests deny; the plugin never clamps silently.
+- Argument-free dispatch (a keybinding or palette invocation carrying `{}`)
+  resolves a bounded default instead of failing. Explicit `scope`,
+  `row_count`, and `max_bytes` always win unchanged. When they are absent the
+  plugin reads the declared settings context: `default_panel` /
+  `default_workspace` (empty string means unset; wildcard, blank, control, or
+  over-long ids fail closed as `E_DEF_INVALID`) and `row_count` /
+  `max_bytes` (accepted only inside the 1..16 / 1..4096 caps; an out-of-window
+  configured value falls back to the shipped cap). With no valid scope axis
+  the query still denies with `E_HISTORY_SCOPE_MISMATCH`. The public Lua
+  surface exposes no focus getter, so the plugin never reads
+  `bitty.workspace`/`bitty.panel` and never widens its capability set to
+  resolve one; the host remains authoritative and still intersects every
+  query scope with the granted scope.
 - Records are redacted and truncated with attribution and the
   Core-attached `untrusted-observation` label: bodies are content under the
   prompt-injection rule, never instructions, never routed into an
@@ -72,11 +90,12 @@ nothing for the generation.
 
 RFC-0004 accepted + threat-model 48b60c4 + W-131 accepted (bitty-docs
 21d63dc) + W-137 accepted (bitty-plugins-docs 002c7ce) + Core host
-76fa42d6; SDK PR #144 pending (not basis). Opt-in bounded capture,
-deletion/retention, privacy and recovery; Atuin through supported CLI/API
-only. Do not treat OSC133 as command/cwd proof.
+76fa42d6; SDK `3ea8e58` (merged `main`, history + declared settings).
+Opt-in bounded capture, deletion/retention, privacy and recovery; Atuin
+through supported CLI/API only. Do not treat OSC133 as command/cwd proof.
 
 CTX-0001 -> CTX-0002 -> CTX-0003 -> CTX-0004 maps to Issues 4 -> 3 ->
-2 -> 1. CTX-0001 (bootstrap) is complete and CTX-0002 (contract
-readiness) is accepted; CTX-0003 implementation is this package, and
-CTX-0004 independent verification is pending.
+2 -> 1. CTX-0001 (bootstrap) is complete, CTX-0002 (contract readiness) is
+accepted, CTX-0003 implementation is this package, and CTX-0004
+independent verification is recorded; CTX-0005 adds the bounded default
+context for argument-free dispatch.

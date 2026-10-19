@@ -6,7 +6,7 @@
   "description": "History policy over the public history-read host APIs: scoped bounded snapshot queries with typed denials.",
   "packageManager": "bun@1.4.2",
   "devDependencies": {
-    "bitty-plugin-sdk": "github:bitty-terminal/bitty-plugin-sdk#0a9487f6c6f47ea0e3cadc9b710e7b1150485822",
+    "bitty-plugin-sdk": "github:bitty-terminal/bitty-plugin-sdk#3ea8e58f6e4da0ce8dcc2c8ade7fe348ec6c9ecb",
     "luaparse": "0.3.1",
     "wasmoon": "1.16.0"
   }

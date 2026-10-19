@@ -5,7 +5,7 @@
     "": {
       "name": "bitty-terminal.history",
       "devDependencies": {
-        "bitty-plugin-sdk": "github:bitty-terminal/bitty-plugin-sdk#0a9487f6c6f47ea0e3cadc9b710e7b1150485822",
+        "bitty-plugin-sdk": "github:bitty-terminal/bitty-plugin-sdk#3ea8e58f6e4da0ce8dcc2c8ade7fe348ec6c9ecb",
         "luaparse": "0.3.1",
         "wasmoon": "1.16.0",
       },
@@ -14,7 +14,7 @@
   "packages": {
     "@types/emscripten": ["@types/emscripten@1.39.10", "", {}, "sha512-TB/6hBkYQJxsZHSqyeuO1Jt0AB/bW6G7rHt9g7lML7SOF6lbgcHvw/Lr+69iqN0qxgXLhWKScAon73JNnptuDw=="],
 
-    "bitty-plugin-sdk": ["bitty-plugin-sdk@github:bitty-terminal/bitty-plugin-sdk#0a9487f", { "dependencies": { "smol-toml": "1.8.0" }, "bin": { "bitty-plugin-lint": "./src/cli.ts" } }, "bitty-terminal-bitty-plugin-sdk-0a9487f", "sha512-xJkvbn06pPlAPQZsbvvrYR2FSKbA42/npyupb2Cqa7nh6L1o7dWpccmpwD31H7ts3mCSG8JVRuUX1qyjNP0ZWA=="],
+    "bitty-plugin-sdk": ["bitty-plugin-sdk@github:bitty-terminal/bitty-plugin-sdk#3ea8e58", { "dependencies": { "smol-toml": "1.8.0" }, "bin": { "bitty-plugin-lint": "./src/cli.ts" } }, "bitty-terminal-bitty-plugin-sdk-3ea8e58", "sha512-W9U2Hq8D3HSFoHkR29fI6vJ+REAwv1BRA2MWiQ1ajsVKElCT04r5c0tJVpl+JN05GBZ7ZDhVmUEbwFGBuOWuKw=="],
 
     "luaparse": ["luaparse@0.3.1", "", { "bin": { "luaparse": "bin/luaparse" } }, "sha512-b21h2bFEbtGXmVqguHogbyrMAA0wOHyp9u/rx+w6Yc9pW1t9YjhGUsp87lYcp7pFRqSWN/PhFkrdIqKEUzRjjQ=="],
 
