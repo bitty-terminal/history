@@ -24,7 +24,8 @@ Prerequisites:
 - Bitty `>=0.0.24,<0.1` with Plugin API `^1.0` (the manifest `[compat]`
   range).
 - Opt-in capture enabled for the sources you query. Transcript and command
-  history return nothing when capture is off (`E_HISTORY_CAPTURE_DISABLED`).
+  history are unavailable when capture is off
+  (`E_HISTORY_CAPTURE_DISABLED`).
 - Consent to the three read grants: `history.transcript.read`,
   `history.commands.read`, and `history.kv.read`. The plugin has no export
   authority, so reading never implies clipboard, filesystem, or process
