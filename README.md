@@ -1,4 +1,4 @@
-# history
+# History
 
 W-137 S-3 (CTX-0003) Lua policy package for the Bitty history keeper:
 opt-in history reads over the public host API only. Accepted contracts are
@@ -7,6 +7,137 @@ boundary, bitty-docs), and W-137 (plugin history-and-storage policy,
 bitty-plugins-docs); the SDK binding is bitty-plugin-sdk at `3ea8e58`
 (merged `main`: history surface from PR #144, declared-settings support from
 PR #152).
+
+## Overview
+
+History answers bounded, read-only snapshot queries over Bitty's persisted
+history: sealed transcript segments, command history, and the plugin's own
+key-value namespace. Every answer is redacted, truncated, attributed, and
+labeled `untrusted-observation`, or replaced by a typed denial. The plugin
+never streams, holds no cursor across calls, and never reads session
+snapshots.
+
+## Install
+
+Prerequisites:
+
+- Bitty `>=0.0.24,<0.1` with Plugin API `^1.0` (the manifest `[compat]`
+  range).
+- Opt-in capture enabled for the sources you query. Transcript and command
+  history are unavailable when capture is off
+  (`E_HISTORY_CAPTURE_DISABLED`).
+- Consent to the three read grants: `history.transcript.read`,
+  `history.commands.read`, and `history.kv.read`. The plugin has no export
+  authority, so reading never implies clipboard, filesystem, or process
+  access.
+
+Install from a local checkout:
+
+```sh
+git clone https://github.com/bitty-terminal/history.git
+cd history
+bitty plugin install "$PWD"
+bitty plugin enable bitty-terminal.history
+bitty plugin list
+```
+
+`bitty plugin install <path>` stages the package under the XDG data store and
+records the capabilities you consent to; it executes no plugin code
+(`--yes` approves non-interactively). Verify activation with
+`bitty plugin list`: the entry must show `bitty-terminal.history`, version
+`0.0.1`, source `local-path`, enabled, and the three read grants.
+`bitty plugin info bitty-terminal.history` prints the recorded grant set.
+
+## Commands
+
+Every command id is qualified with the plugin id. All commands return a table
+with `ok` and `code`; on success the bounded page is delivered through the
+host, and on denial `code` carries the typed error. None of the commands has a
+default keybinding.
+
+| Command                                   | What it does                                                                                        | Arguments                                                                                                                                                                                                                           | Default keybinding |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `bitty-terminal.history:query-transcript` | One bounded snapshot over sealed transcript segments while opt-in capture holds.                    | `scope` (`panel` and/or `workspace`), `row_start` (integer ≥ 0), `row_count` (integer ≥ 1, cap 16), `max_bytes` (integer ≥ 1, cap 4096), `op` (`list` default, `tail`, or `search`), `needle` (1–256 bytes, required for `search`). | None               |
+| `bitty-terminal.history:query-commands`   | One bounded list, tail, or search read over command history.                                        | Same as `query-transcript`.                                                                                                                                                                                                         | None               |
+| `bitty-terminal.history:query-kv`         | One bounded snapshot read of the plugin's own KV namespace; cross-plugin reads are unrepresentable. | `row_start`, `row_count` (cap 16), `max_bytes` (cap 4096), `op`, `needle`. No panel or workspace extent: the caller namespace is the scope.                                                                                         | None               |
+
+Explicit arguments always win. An argument-free dispatch (a keybinding or
+palette invocation carrying `{}`) resolves the bounded defaults from
+Configuration; with no usable scope axis it denies with
+`E_HISTORY_SCOPE_MISMATCH` rather than widening the query.
+
+## Configuration
+
+Settings live in `$XDG_CONFIG_HOME/bitty/plugins/bitty-terminal.history.lua`.
+Values are read at activation and pinned to that plugin generation.
+
+| Key                 | Type     | Default | Description                                                                                                                                                               | Reload  |
+| ------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `default_panel`     | `string` | `""`    | Panel id used as the default scope axis when a dispatch carries no explicit scope. Empty means unset; wildcard, blank, control, or over-long ids fail as `E_DEF_INVALID`. | Restart |
+| `default_workspace` | `string` | `""`    | Workspace id used as the default scope axis when a dispatch carries no explicit scope. Empty means unset; the same validation applies.                                    | Restart |
+| `row_count`         | `int`    | `16`    | Rows requested when a dispatch carries no explicit `row_count`. Accepted 1–16; an out-of-window value falls back to the shipped cap (16).                                 | Restart |
+| `max_bytes`         | `int`    | `4096`  | Byte budget when a dispatch carries no explicit `max_bytes`. Accepted 1–4096; an out-of-window value falls back to the shipped cap (4096).                                | Restart |
+
+Example:
+
+```lua
+-- $XDG_CONFIG_HOME/bitty/plugins/bitty-terminal.history.lua
+return {
+  default_panel = "", -- set to a panel id for argument-free dispatch
+  default_workspace = "",
+  row_count = 16,
+  max_bytes = 4096,
+}
+```
+
+`Restart` means settings are resolved during activation: there is no settings
+watcher or hot-reload path, so edit the file and restart Bitty. Explicit
+`scope`, `row_count`, and `max_bytes` arguments override these values.
+Configured values are convenience defaults, never authority: the host still
+intersects every query scope with the granted scope and denies over-bound
+requests.
+
+## Keybindings
+
+History registers no default keybindings. Bind a chord in
+`$XDG_CONFIG_HOME/bitty/init.lua`:
+
+```lua
+return {
+  keymaps = {
+    {
+      chord = "ctrl+shift+h",
+      action = "bitty-terminal.history:query-transcript",
+      context = "global",
+    },
+  },
+}
+```
+
+An argument-free binding uses the Configuration defaults above. To query a
+specific panel or workspace, bind the command through a caller that passes
+`scope` explicitly.
+
+## Troubleshooting
+
+| Code                         | Class        | Cause                                                                                                               | Remedy                                                                                                                                             |
+| ---------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `E_SETTINGS_UNDECLARED`      | `validation` | A settings read named a key absent from the manifest `[settings]` declarations.                                     | Install a plugin version whose declarations match the running build. Only the four keys above are declared; undeclared config entries are ignored. |
+| `E_INCOMPATIBLE`             | `validation` | The running host is outside `>=0.0.24,<0.1`, or Plugin API is not `^1.0`.                                           | Upgrade Bitty or install a History release whose `[compat]` range covers your host.                                                                |
+| `E_CAPABILITY_DENIED`        | `runtime`    | A required read grant is missing, expired, or revoked.                                                              | Re-run `bitty plugin install <path>` and approve the current grant set; `bitty plugin list` shows what is recorded.                                |
+| `E_HISTORY_MISSING_GRANT`    | `runtime`    | No per-plugin, per-source read grant is recorded (deny by default).                                                 | Approve the matching `history.*.read` grant for the source you query.                                                                              |
+| `E_HISTORY_REVOKED_GRANT`    | `runtime`    | The grant existed but was revoked or expired after activation.                                                      | Re-grant it and restart Bitty; a live generation keeps the grant bound at activation.                                                              |
+| `E_HISTORY_SCOPE_MISMATCH`   | `runtime`    | The query names no panel/workspace extent, the grant does not cover it, or no usable default context is configured. | Pass an explicit `scope`, or set `default_panel`/`default_workspace` and restart. The host only returns data inside the granted scope.             |
+| `E_HISTORY_OVER_BOUND`       | `runtime`    | `row_count`, `max_bytes`, or the needle exceeds the accepted cap, or a bound is zero.                               | Stay inside 1–16 rows, 1–4096 bytes, and a 1–256 byte needle. The plugin never clamps an explicit over-bound request.                              |
+| `E_HISTORY_CAPTURE_DISABLED` | `runtime`    | Opt-in capture for the source is off, so nothing was persisted to read.                                             | Enable capture for transcript or command history, then query again.                                                                                |
+| `E_HISTORY_SAFE_MODE`        | `runtime`    | Bitty runs in safe mode, which reads no transcript, history, snapshot, or KV.                                       | Restart without safe mode to use History.                                                                                                          |
+| `E_HISTORY_TRUST_DENIED`     | `runtime`    | The caller's trust level or domain admits no standing access.                                                       | Query from a trusted local context; unknown trust levels and domains deny rather than default.                                                     |
+| `E_HISTORY_UNAVAILABLE`      | `runtime`    | The content was purged or expired, or the source is otherwise unavailable.                                          | Treat it as typed unavailability, not an empty result. Query a narrower point in time or accept that the data is gone.                             |
+| `E_DEF_INVALID`              | `validation` | A configured default scope is wildcard, blank, control-bearing, or longer than 128 bytes.                           | Fix `default_panel` or `default_workspace` and restart. Empty string means "no bound context", not a wildcard.                                     |
+
+`E_DISABLED` means the activation-time compatibility gate rejected this
+generation, and `NO_HOST` means the module was loaded without the host bridge
+for tests or headless use; neither state exposes commands.
 
 ## Scope
 
@@ -99,3 +230,16 @@ CTX-0001 -> CTX-0002 -> CTX-0003 -> CTX-0004 maps to Issues 4 -> 3 ->
 accepted, CTX-0003 implementation is this package, and CTX-0004
 independent verification is recorded; CTX-0005 adds the bounded default
 context for argument-free dispatch.
+
+## Development
+
+Run the repository gates through the justfile:
+
+```sh
+just install
+just check
+```
+
+`just check` includes `just docs-check`, which fails when the README
+Configuration table omits a declared `[settings]` key, documents an undeclared
+key, or drifts from the declared type or default.
