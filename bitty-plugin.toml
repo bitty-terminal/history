@@ -34,8 +34,9 @@ license = "MIT"
 # Application and Plugin API ranges. Both are syntax-validated here and
 # resolved by the host at install time. The host validates compatibility
 # before activation and fails closed (disable with a diagnostic, no partial
-# activation) on mismatch.
-bitty = ">=0.0.24,<0.1"
+# activation) on mismatch. Host compatibility is minimum-only (bitty#2462):
+# the floor is the verified 0.0.24 host and no upper bound is declared.
+bitty = ">=0.0.24"
 plugin-api = "^1.0"
 
 [settings]

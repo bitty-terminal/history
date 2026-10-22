@@ -21,8 +21,8 @@ snapshots.
 
 Prerequisites:
 
-- Bitty `>=0.0.24,<0.1` with Plugin API `^1.0` (the manifest `[compat]`
-  range).
+- Bitty `>=0.0.24` with Plugin API `^1.0` (the manifest `[compat]` minimum;
+  no upper bound is declared).
 - Opt-in capture enabled for the sources you query. Transcript and command
   history are unavailable when capture is off
   (`E_HISTORY_CAPTURE_DISABLED`).
@@ -123,7 +123,7 @@ specific panel or workspace, bind the command through a caller that passes
 | Code                         | Class        | Cause                                                                                                               | Remedy                                                                                                                                             |
 | ---------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `E_SETTINGS_UNDECLARED`      | `validation` | A settings read named a key absent from the manifest `[settings]` declarations.                                     | Install a plugin version whose declarations match the running build. Only the four keys above are declared; undeclared config entries are ignored. |
-| `E_INCOMPATIBLE`             | `validation` | The running host is outside `>=0.0.24,<0.1`, or Plugin API is not `^1.0`.                                           | Upgrade Bitty or install a History release whose `[compat]` range covers your host.                                                                |
+| `E_INCOMPATIBLE`             | `validation` | The running host does not satisfy `>=0.0.24`, or Plugin API is not `^1.0`.                                          | Upgrade Bitty or install a History release whose `[compat]` minimum covers your host.                                                              |
 | `E_CAPABILITY_DENIED`        | `runtime`    | A required read grant is missing, expired, or revoked.                                                              | Re-run `bitty plugin install <path>` and approve the current grant set; `bitty plugin list` shows what is recorded.                                |
 | `E_HISTORY_MISSING_GRANT`    | `runtime`    | No per-plugin, per-source read grant is recorded (deny by default).                                                 | Approve the matching `history.*.read` grant for the source you query.                                                                              |
 | `E_HISTORY_REVOKED_GRANT`    | `runtime`    | The grant existed but was revoked or expired after activation.                                                      | Re-grant it and restart Bitty; a live generation keeps the grant bound at activation.                                                              |
@@ -142,7 +142,8 @@ for tests or headless use; neither state exposes commands.
 ## Scope
 
 - `bitty-plugin.toml`: plugin id `bitty-terminal.history`, version `0.0.1`,
-  compat `bitty >=0.0.24,<0.1` with `plugin-api ^1.0`, exactly three
+  compat floor `bitty >=0.0.24` with `plugin-api ^1.0` and no upper bound,
+  exactly three
   capabilities (`history.transcript.read`, `history.commands.read`,
   `history.kv.read`), lazy `query-transcript`/`query-commands`/`query-kv`
   commands, no event subscriptions, and four declared settings
@@ -213,7 +214,9 @@ for tests or headless use; neither state exposes commands.
 ## Compat
 
 The host validates `plugin-api ^1.0` before activation and fails closed on
-mismatch. The plugin repeats the major-version gate at load as
+mismatch. Host compatibility is minimum-only: `[compat].bitty` declares the
+verified floor `>=0.0.24` and no ceiling, so newer hosts install without a
+manifest edit. The plugin repeats the major-version gate at load as
 defense in depth: on mismatch it records `disabled_reason` and registers
 nothing for the generation.
 
