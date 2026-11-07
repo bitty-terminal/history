@@ -107,7 +107,7 @@ return {
   keymaps = {
     {
       chord = "ctrl+shift+h",
-      action = "bitty-terminal.history:query-transcript",
+      action = "command:bitty-terminal.history:query-transcript",
       context = "global",
     },
   },
