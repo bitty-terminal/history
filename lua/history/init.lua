@@ -30,6 +30,16 @@
 -- are treated as untrusted content (labeled, never instructions) and never
 -- routed into an instruction channel.
 --
+-- Presentation (bitty#2967): a successful query paints its page into the
+-- single focusable overlay (accepted W-01 overlay-input-capture contract,
+-- capability `ui.overlay.focus`). The data path and the paint path stay
+-- separate: the query stores the verified page, and the command entry point
+-- presents it, so a host without the overlay surface (or a generation whose
+-- consent omitted the grant) still answers with the typed `{ok, code}` result
+-- and simply paints nothing. The overlay is a static snapshot viewer, never
+-- an input surface: Core owns `Esc`, focus-switch, and idle-timeout
+-- revocation, and this module never polls for input.
+--
 -- The host evaluates this file once per plugin activation and owns every
 -- resource created here for the lifetime of that generation. The code stays
 -- inside the Lua 5.1 grammar (the `just lua` gate) and uses no `utf8`
@@ -65,6 +75,29 @@ M.REQUIRED_API_MAJOR = 1 -- manifest declares plugin-api ^1.0; same gate here
 -- SDK `HISTORY_UNTRUSTED_LABEL`; freshness `HISTORY_FRESHNESS`).
 M.UNTRUSTED_LABEL = "untrusted-observation"
 M.FRESHNESS = "point-in-time-no-guarantee"
+
+-- Presentation bounds (accepted W-01 overlay surface). `ui.overlay.update`
+-- is a per-call 4096-byte surface, so a page whose rows do not fit is painted
+-- as a bounded prefix plus a typed note instead of being rejected by the host
+-- and leaving the overlay blank. `MAX_SCENE_TEXT_BYTES` is the JSON-escaped
+-- text budget; the reserve covers the scene JSON structure for the maximum
+-- node count (title + 16 rows + 2 notes, ~26 bytes per `Text` node plus the
+-- `List` wrapper). Bodies are host `String`s (valid UTF-8), so one Lua byte
+-- is one JSON payload byte unless escaping grows it, which `escaped_bytes`
+-- accounts for.
+M.OVERLAY_CALL_MAX_BYTES = 4096
+M.SCENE_STRUCTURE_RESERVE_BYTES = 576
+M.MAX_SCENE_TEXT_BYTES = M.OVERLAY_CALL_MAX_BYTES - M.SCENE_STRUCTURE_RESERVE_BYTES
+M.SCENE_NOTE_RESERVE_BYTES = 96
+M.SCENE_TITLE_PREFIX = "History: "
+M.SCENE_PLACEHOLDER = "Esc closes"
+M.EMPTY_NOTE = "No records in scope"
+M.NOTE_SKIPPED_PREFIX = "records skipped: "
+M.NOTE_OMITTED_PREFIX = "rows not shown: "
+-- Display-note tags (lowercase on purpose: the `E_*` vocabulary stays
+-- reserved for host denials and client policy codes).
+M.NOTE_INVALID_RECORD = "invalid-record"
+M.NOTE_OVERLAY_BUDGET = "overlay-budget"
 
 -- Queryable sources; session snapshots are never a source.
 M.SOURCES = { "transcript", "commands", "kv" }
@@ -325,6 +358,13 @@ local state = {
   last_code = "ok",
   last_detail = "",
   last_page = nil,
+  -- Admitted records for the last successful page (plain `{body,label}`
+  -- pairs) plus the count of records dropped by admission, so the paint path
+  -- never re-walks untrusted host structures.
+  last_records = {},
+  skipped_records = 0,
+  -- Last scene successfully presented to the overlay (diagnostics/tests).
+  last_scene = nil,
 }
 
 local function note(code, detail)
@@ -459,10 +499,14 @@ local function page_records(page)
   return page.records
 end
 
--- Verifies one host-delivered page before the plugin trusts it: freshness
--- is exactly point-in-time-no-guarantee, every record is redacted with the
--- Core-attached untrusted label surviving, and every record carries
--- attribution. Failure fails closed (never delivered as instructions).
+-- Verifies one host-delivered page before the plugin trusts it: freshness is
+-- exactly point-in-time-no-guarantee, the record list is present, and the
+-- scope total is a number. Failure fails closed (nothing is delivered).
+--
+-- Per-record admission is a separate step (see `collect_records`): a record
+-- that misses the redaction/label/body/truncation/attribution contract is
+-- dropped from the delivered set and counted, never trusted and never
+-- painted, so one malformed record cannot blank the whole answer.
 local function verify_page(page)
   if page == nil then
     return false, "page returned no value"
@@ -474,29 +518,38 @@ local function verify_page(page)
   if records == nil then
     return false, "page records missing"
   end
-  local n = 0
-  for _, rec in ipairs(records) do
-    n = n + 1
-    if rec.redacted ~= true then
-      return false, "record " .. tostring(n) .. " is not redacted"
-    end
-    if rec.label ~= M.UNTRUSTED_LABEL then
-      return false, "record " .. tostring(n) .. " misses the untrusted label"
-    end
-    if rec.body == nil or type(rec.body) ~= "string" then
-      return false, "record " .. tostring(n) .. " body missing"
-    end
-    if rec.truncated == nil then
-      return false, "record " .. tostring(n) .. " truncated flag missing"
-    end
-    if rec.attribution == nil then
-      return false, "record " .. tostring(n) .. " attribution missing"
-    end
-  end
   if page.total_in_scope == nil or type(page.total_in_scope) ~= "number" then
     return false, "page total_in_scope missing"
   end
   return true
+end
+
+-- Admits records one by one into a fresh Lua table of plain `{body,label}`
+-- pairs. A record is admitted only when it is redacted, carries the
+-- Core-attached untrusted label, has a string body, and reports truncation
+-- and attribution. Returns the admitted list plus the skipped count (the
+-- typed note the presentation layer paints).
+function M.collect_records(page)
+  local records = page_records(page)
+  if records == nil then
+    return {}, 0
+  end
+  local admitted = {}
+  local skipped = 0
+  for _, rec in ipairs(records) do
+    local valid = rec ~= nil
+      and rec.redacted == true
+      and rec.label == M.UNTRUSTED_LABEL
+      and type(rec.body) == "string"
+      and rec.truncated ~= nil
+      and rec.attribution ~= nil
+    if valid then
+      admitted[#admitted + 1] = { body = rec.body, label = rec.label }
+    else
+      skipped = skipped + 1
+    end
+  end
+  return admitted, skipped
 end
 
 -- Scalar state queries for tests and diagnostics (plain values only).
@@ -512,33 +565,23 @@ function M.last_page()
   return state.last_page
 end
 
+function M.last_scene()
+  return state.last_scene
+end
+
+function M.skipped_count()
+  return state.skipped_records
+end
+
 function M.record_count()
-  if state.last_page == nil then
-    return 0
-  end
-  local records = page_records(state.last_page)
-  if records == nil then
-    return 0
-  end
-  local n = 0
-  for _ in ipairs(records) do
-    n = n + 1
-  end
-  return n
+  return #state.last_records
 end
 
 -- Record bodies are untrusted content under the prompt-injection rule: this
 -- helper returns them for display only and never executes, interpolates, or
 -- routes them into an instruction channel.
 function M.record_body(index)
-  if state.last_page == nil then
-    return nil
-  end
-  local records = page_records(state.last_page)
-  if records == nil then
-    return nil
-  end
-  local rec = records[index]
+  local rec = state.last_records[index]
   if rec == nil then
     return nil
   end
@@ -546,14 +589,7 @@ function M.record_body(index)
 end
 
 function M.record_label(index)
-  if state.last_page == nil then
-    return nil
-  end
-  local records = page_records(state.last_page)
-  if records == nil then
-    return nil
-  end
-  local rec = records[index]
+  local rec = state.last_records[index]
   if rec == nil then
     return nil
   end
@@ -641,9 +677,187 @@ function M.query(source, opts)
     note("E_UNKNOWN", "history page failed verification: " .. tostring(why))
     return false, state.last_code
   end
+  local records, skipped = M.collect_records(page)
   state.last_page = page
+  state.last_records = records
+  state.skipped_records = skipped
   note("ok", "")
   return true, "ok"
+end
+
+-- ---------------------------------------------------------------------------
+-- Presentation: paint the latest answer into the focusable overlay
+-- ---------------------------------------------------------------------------
+--
+-- One overlay session serves all three commands. `bitty.ui.overlay.acquire`
+-- mounts the surface and starts the capture in one Core-owned switch, and
+-- `bitty.ui.overlay.update` replaces the scene. Core surfaces only the
+-- capture owner's block, so the acquire is what makes the transcript visible;
+-- a query that returns `{ok, code}` without an acquire would answer with no
+-- surface at all (bitty#2967).
+--
+-- The session is held while the user reads: Core owns `Esc`, focus-switch,
+-- idle-timeout, unload, and crash revocation, and emits `overlay.released`
+-- for observers. This module keeps no subscription; instead every paint
+-- treats an update rejection as a stale session, drops the handle, and
+-- acquires one fresh surface (a released handle can never be updated).
+-- Presentation never fails the data path: every host call is guarded and a
+-- missing `bitty.ui` bridge, a missing grant, a foreign capture, or a
+-- rejected scene degrades to a data-only answer.
+
+local overlay_handle = nil
+
+-- The W-01 overlay table, or nil on a host that predates it. The injected
+-- bridge arrives as engine userdata (field reads work, `type()` is not
+-- "table"), so only nil means absent. Checked on every use (never cached) so
+-- a mid-generation bridge change cannot wedge a paint.
+local function overlay_table()
+  if not has_host() then
+    return nil
+  end
+  local ui = bitty.ui
+  if ui == nil then
+    return nil
+  end
+  return ui.overlay
+end
+
+local function scene_title(source)
+  return M.SCENE_TITLE_PREFIX .. tostring(source)
+end
+
+-- JSON-escaped byte length of one text run. The host bounds an overlay update
+-- by the JSON payload, and JSON escaping grows `"`, `\`, and control bytes, so
+-- the budget below must account for the escaped size rather than `#text`.
+function M.escaped_bytes(text)
+  local total = 0
+  for index = 1, #text do
+    local byte = string.byte(text, index)
+    if byte == 34 or byte == 92 then
+      total = total + 2
+    elseif byte < 32 then
+      total = total + 6
+    else
+      total = total + 1
+    end
+  end
+  return total
+end
+
+-- Build the scene for one answer: a title row, the admitted record bodies in
+-- host order, and typed notes for skipped and not-shown rows. Never empty, so
+-- a surfaced overlay always paints either rows or an explicit "no records"
+-- line. Rows that would cross the per-update call ceiling are not shown and
+-- are reported by count instead of being silently dropped by the host.
+function M.build_scene(source, records, skipped)
+  local children = { { kind = "Text", text = scene_title(source) } }
+  local used = M.escaped_bytes(children[1].text)
+  local skipped_note = nil
+  local reserved = M.SCENE_NOTE_RESERVE_BYTES
+  if skipped > 0 then
+    skipped_note = M.NOTE_SKIPPED_PREFIX .. tostring(skipped)
+      .. " (" .. M.NOTE_INVALID_RECORD .. ")"
+    reserved = reserved + M.escaped_bytes(skipped_note)
+  end
+  local shown = 0
+  for index, record in ipairs(records) do
+    local cost = M.escaped_bytes(record.body)
+    if used + reserved + cost > M.MAX_SCENE_TEXT_BYTES then
+      break
+    end
+    used = used + cost
+    shown = index
+    children[#children + 1] = { kind = "Text", text = record.body }
+  end
+  local omitted = #records - shown
+  if omitted > 0 then
+    children[#children + 1] = {
+      kind = "Text",
+      text = M.NOTE_OMITTED_PREFIX .. tostring(omitted)
+        .. " (" .. M.NOTE_OVERLAY_BUDGET .. ")",
+    }
+  end
+  if skipped_note ~= nil then
+    children[#children + 1] = { kind = "Text", text = skipped_note }
+  end
+  if #records == 0 and skipped == 0 then
+    children[#children + 1] = { kind = "Text", text = M.EMPTY_NOTE }
+  end
+  return { kind = "List", children = children }
+end
+
+-- End the held session, if any. Release is Core-idempotent and ungated, so a
+-- revoked grant or an already-ended session still clears local state.
+function M.close_overlay(reason)
+  local handle = overlay_handle
+  overlay_handle = nil
+  if handle == nil then
+    return false
+  end
+  local overlay = overlay_table()
+  if overlay == nil or type(overlay.release) ~= "function" then
+    return false
+  end
+  pcall(overlay.release, handle, reason or "cancelled")
+  return true
+end
+
+local function acquire_overlay(overlay, source)
+  if type(overlay.acquire) ~= "function" then
+    return nil
+  end
+  local ok, handle = pcall(overlay.acquire, {
+    title = scene_title(source),
+    placeholder = M.SCENE_PLACEHOLDER,
+  })
+  if not ok or handle == nil then
+    return nil
+  end
+  return handle
+end
+
+-- Present the outcome of one query. `ok` false closes any held surface so
+-- stale rows never outlive a newer denial; `ok` true repaints the current
+-- session or acquires one. Returns whether the scene was accepted.
+function M.present(source, ok)
+  if not ok then
+    M.close_overlay("cancelled")
+    return false
+  end
+  local overlay = overlay_table()
+  if overlay == nil or type(overlay.update) ~= "function" then
+    return false
+  end
+  local scene = M.build_scene(source, state.last_records, state.skipped_records)
+  local handle = overlay_handle
+  if handle == nil then
+    handle = acquire_overlay(overlay, source)
+    if handle == nil then
+      return false
+    end
+    overlay_handle = handle
+  end
+  local updated_ok, updated = pcall(overlay.update, handle, scene)
+  if updated_ok and updated ~= false then
+    state.last_scene = scene
+    return true
+  end
+  -- The Core ended the session (Esc, focus switch, idle timeout, unload) or
+  -- rejected the update; a released handle can never be updated, so drop it
+  -- and try one fresh surface before degrading to a data-only answer.
+  M.close_overlay("cancelled")
+  handle = acquire_overlay(overlay, source)
+  if handle == nil then
+    return false
+  end
+  overlay_handle = handle
+  local retried_ok, retried = pcall(overlay.update, handle, scene)
+  if not retried_ok or retried == false then
+    M.close_overlay("cancelled")
+    return false
+  end
+  state.last_scene = scene
+  return true
 end
 
 -- ---------------------------------------------------------------------------
@@ -695,36 +909,43 @@ do
     }
   end
 
+  -- Every command answers with the typed `{ok, code}` table and paints the
+  -- outcome into the focusable overlay. Presentation is guarded so a host
+  -- without the surface, a missing grant, or a foreign capture can never turn
+  -- a delivered page into a failed command (bitty#2967).
+  local function run_query(source, args)
+    local ok, code = M.query(source, args)
+    pcall(M.present, source, ok)
+    return { ok = ok, code = code }
+  end
+
   bitty.commands.register({
     id = "query-transcript",
     title = "History: query transcript",
-    description = "One-shot bounded snapshot over sealed transcript segments while opt-in capture holds; typed denial or a redacted labeled page.",
+    description = "One-shot bounded snapshot over sealed transcript segments while opt-in capture holds; typed denial or a redacted labeled page painted into the focusable overlay.",
     args_schema = query_schema(),
     run = function(args)
-      local ok, code = M.query("transcript", args)
-      return { ok = ok, code = code }
+      return run_query("transcript", args)
     end,
   })
 
   bitty.commands.register({
     id = "query-commands",
     title = "History: query commands",
-    description = "One-shot scoped list, search, or tail read over command history; typed denial or a redacted labeled page.",
+    description = "One-shot scoped list, search, or tail read over command history; typed denial or a redacted labeled page painted into the focusable overlay.",
     args_schema = query_schema(),
     run = function(args)
-      local ok, code = M.query("commands", args)
-      return { ok = ok, code = code }
+      return run_query("commands", args)
     end,
   })
 
   bitty.commands.register({
     id = "query-kv",
     title = "History: query own KV",
-    description = "One-shot snapshot read of the plugin own KV namespace only; cross-plugin reads are unrepresentable.",
+    description = "One-shot snapshot read of the plugin own KV namespace only; cross-plugin reads are unrepresentable; the page is painted into the focusable overlay.",
     args_schema = query_schema(),
     run = function(args)
-      local ok, code = M.query("kv", args)
-      return { ok = ok, code = code }
+      return run_query("kv", args)
     end,
   })
 

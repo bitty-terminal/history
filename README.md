@@ -27,9 +27,10 @@ Prerequisites:
   history are unavailable when capture is off
   (`E_HISTORY_CAPTURE_DISABLED`).
 - Consent to the three read grants: `history.transcript.read`,
-  `history.commands.read`, and `history.kv.read`. The plugin has no export
-  authority, so reading never implies clipboard, filesystem, or process
-  access.
+  `history.commands.read`, and `history.kv.read`, plus the single
+  presentation grant `ui.overlay.focus` that paints the answer. The plugin
+  has no export authority, so reading never implies clipboard, filesystem, or
+  process access.
 
 Install from a local checkout:
 
@@ -51,9 +52,21 @@ records the capabilities you consent to; it executes no plugin code
 ## Commands
 
 Every command id is qualified with the plugin id. All commands return a table
-with `ok` and `code`; on success the bounded page is delivered through the
-host, and on denial `code` carries the typed error. None of the commands has a
-default keybinding.
+with `ok` and `code`; on success the bounded page is painted into the
+focusable overlay, and on denial `code` carries the typed error. None of the
+commands has a default keybinding.
+
+A successful query opens the focusable overlay with one `Text` row per
+admitted record, in host order, under a `History: <source>` title. An empty
+page paints `No records in scope` instead of a blank surface; a record that
+misses the redaction/label/attribution contract is not painted and is
+reported as `records skipped: <n> (invalid-record)`; a page whose rows exceed
+the per-update overlay byte ceiling paints a bounded prefix plus
+`rows not shown: <n> (overlay-budget)`. `Esc`, a focus switch, or the Core
+idle timeout closes the surface, and a later query opens a fresh one. If the
+`ui.overlay.focus` grant is absent, another plugin holds the capture, or the
+host has no overlay surface, the command still returns its `{ok, code}`
+answer and paints nothing: presentation never fails the data path.
 
 | Command                                   | What it does                                                                                        | Arguments                                                                                                                                                                                                                           | Default keybinding |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
@@ -135,6 +148,15 @@ specific panel or workspace, bind the command through a caller that passes
 | `E_HISTORY_UNAVAILABLE`      | `runtime`    | The content was purged or expired, or the source is otherwise unavailable.                                          | Treat it as typed unavailability, not an empty result. Query a narrower point in time or accept that the data is gone.                             |
 | `E_DEF_INVALID`              | `validation` | A configured default scope is wildcard, blank, control-bearing, or longer than 128 bytes.                           | Fix `default_panel` or `default_workspace` and restart. Empty string means "no bound context", not a wildcard.                                     |
 
+If a query returns `{ok = true, code = "ok"}` but no overlay appears, the
+host refused the presentation path, not the read: the `ui.overlay.focus`
+grant is missing from the installed grant set, another plugin holds the
+focusable capture, or the host build predates the W-01 overlay surface. The
+data answer is still valid. Re-install with the current grant set and check
+`bitty plugin info bitty-terminal.history` for the recorded grants. A surface
+that disappears while reading was closed by `Esc`, a focus switch, or the
+Core idle timeout; run the query again.
+
 `E_DISABLED` means the activation-time compatibility gate rejected this
 generation, and `NO_HOST` means the module was loaded without the host bridge
 for tests or headless use; neither state exposes commands.
@@ -143,28 +165,34 @@ for tests or headless use; neither state exposes commands.
 
 - `bitty-plugin.toml`: plugin id `bitty-terminal.history`, version `0.0.1`,
   compat floor `bitty >=0.0.24` with `plugin-api ^1.0` and no upper bound,
-  exactly three
-  capabilities (`history.transcript.read`, `history.commands.read`,
-  `history.kv.read`), lazy `query-transcript`/`query-commands`/`query-kv`
-  commands, no event subscriptions, and four declared settings
+  exactly three read capabilities (`history.transcript.read`,
+  `history.commands.read`, `history.kv.read`) plus the single presentation
+  grant `ui.overlay.focus`, lazy `query-transcript`/`query-commands`/
+  `query-kv` commands, no event subscriptions, and four declared settings
   (`default_panel`, `default_workspace`, `row_count`, `max_bytes`) that supply
   capability-neutral bounded defaults. No export capability: per the
   RFC-0004 grant-combination rule the history grant never implies
-  clipboard, filesystem, or process authority.
+  clipboard, filesystem, or process authority. The overlay grant is
+  presentation-only: it paints the answer and carries no read, export,
+  input, or Terminal Truth authority.
 - `lua/history/init.lua`: the whole policy. Source/scope/bound validation
   (transcript, commands, own KV; session snapshots fail closed), one-shot
   bounded snapshot queries through `bitty.history.*.query`, typed-denial
-  surfacing with oracle-tight shapes, and untrusted-label verification on
-  every delivered page (redacted, labeled, attributed, point-in-time).
-  No streaming, no watch, no tail-follow; no session-snapshot access.
+  surfacing with oracle-tight shapes, untrusted-label verification on every
+  delivered page (redacted, labeled, attributed, point-in-time), and
+  overlay presentation of the admitted rows (title, typed empty/skip/budget
+  notes, bounded scene budget). No streaming, no watch, no tail-follow; no
+  session-snapshot access.
 - `tests/`: bun + wasmoon suite against the SDK `MockHost`, mirroring the
   composer harness pattern. Covers scoped snapshots with typed denials,
   source isolation, tail/search ops, over-bound denials, purge/expiry as
   typed unavailability, safe-mode and trust denials, revoked-vs-missing
   distinction, one-shot command dispatch, argument-free keybinding dispatch
   with bounded defaults (explicit-scope precedence and the no-context
-  denial), mismatch disable, denial parity vs a foreign manifest, and
-  oracle-tight denial texts.
+  denial), mismatch disable, denial parity vs a foreign manifest,
+  oracle-tight denial texts, and overlay presentation (row order, empty and
+  malformed-record notes, held-session repaint, stale-session re-acquire,
+  scene byte budget, and data-only degradation without the grant).
 
 ## Rules
 
@@ -191,7 +219,19 @@ for tests or headless use; neither state exposes commands.
 - Records are redacted and truncated with attribution and the
   Core-attached `untrusted-observation` label: bodies are content under the
   prompt-injection rule, never instructions, never routed into an
-  instruction channel.
+  instruction channel. A record that misses the label, redaction,
+  truncation, body, or attribution contract is never admitted to the
+  presented set; it is counted and reported as
+  `records skipped: <n> (invalid-record)`.
+- Presentation is one focusable overlay under `ui.overlay.focus`. The
+  plugin acquires the surface, paints a `List` of `Text` rows (title plus
+  admitted bodies), and holds the session while the user reads; `Esc`,
+  focus switches, and the Core idle timeout close it, and the next query
+  re-acquires. The scene stays inside the per-update byte ceiling: a page
+  that does not fit paints a bounded prefix plus
+  `rows not shown: <n> (overlay-budget)`. Presentation never fails the data
+  path: a missing grant, a foreign capture, or a host without the surface
+  degrades to the typed `{ok, code}` answer with no paint.
 - Purges and expiry are respected: purged content surfaces as typed
   unavailability, never as a silent gap and never resurrected from a
   derived index.

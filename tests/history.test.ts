@@ -24,6 +24,7 @@ import {
   KV_COMMAND,
   lastCode,
   MANIFEST_SOURCE,
+  PRESENTATION_CAPABILITIES,
   recordBody,
   recordCount,
   recordLabel,
@@ -92,7 +93,7 @@ describe("manifest", () => {
     );
   });
 
-  test("declares exactly the public history-read set and no export grant", () => {
+  test("declares exactly the public history-read set plus the overlay grant and no export grant", () => {
     expect([...HISTORY_CAPABILITIES].sort()).toEqual(
       [
         "history.commands.read",
@@ -101,16 +102,19 @@ describe("manifest", () => {
       ].sort(),
     );
     // Declared authority lives in TOML keys, not prose: the [capabilities]
-    // section must grant exactly the triple (the `bitty-terminal.*` plugin
-    // id prefix is not authority, so a bare `terminal.` substring probe
-    // would false-positive on it). Nothing beyond the triple may be `= true`.
+    // section must grant exactly the three history reads plus the single
+    // presentation grant (the `bitty-terminal.*` plugin id prefix is not
+    // authority, so a bare `terminal.` substring probe would false-positive
+    // on it). Nothing beyond that set may be `= true`.
     const section = MANIFEST_SOURCE.split("[capabilities]")[1].split("[")[0];
     const granted = section
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.endsWith("= true"))
       .map((line) => line.split("=")[0].trim());
-    expect(granted.sort()).toEqual([...HISTORY_CAPABILITIES].sort());
+    expect(granted.sort()).toEqual(
+      [...HISTORY_CAPABILITIES, ...PRESENTATION_CAPABILITIES].sort(),
+    );
     const declared = MANIFEST_SOURCE.split("\n")
       .filter((line) => !line.trimStart().startsWith("#"))
       .join("\n");
@@ -119,6 +123,9 @@ describe("manifest", () => {
     expect(declared).not.toMatch(/bitty\.terminal\./);
     expect(declared).not.toMatch(/bitty\.selection\./);
     expect(declared).not.toMatch(/bitty\.store/);
+    // Presentation stays minimal: no rich-slot or v1 overlay-slot grant.
+    expect(declared).not.toMatch(/ui\.rich\s*=\s*true/);
+    expect(declared).not.toMatch(/^\s*ui\.overlay\s*=\s*true/m);
   });
 });
 
@@ -587,7 +594,7 @@ describe("commands are one-shot snapshots, never streams", () => {
     expect(await recordBody(run, 1)).toBe("k0");
   });
 
-  test("the plugin subscribes to no events and touches only bitty.history", async () => {
+  test("the plugin subscribes to no events and touches only the read and overlay namespaces", async () => {
     const section = MANIFEST_SOURCE.split("[lazy]")[1] ?? "";
     expect(section).not.toMatch(/events/);
     const { readFileSync } = await import("node:fs");
@@ -603,13 +610,27 @@ describe("commands are one-shot snapshots, never streams", () => {
       [...code.matchAll(/bitty\.([A-Za-z_]+)/g)].map((m) => m[1]),
     );
     for (const ns of namespaces) {
-      expect(["api_version", "commands", "history", "settings"]).toContain(ns);
+      expect([
+        "api_version",
+        "commands",
+        "history",
+        "settings",
+        "ui",
+      ]).toContain(ns);
     }
+    // Presentation is the focusable overlay only: no rich slots, no v1
+    // overlay-slot mount, no workspace/panel focus reads.
+    expect(code).toMatch(/bitty\.ui\b/);
+    expect(code).toMatch(/\bui\.overlay\b/);
+    expect(code).not.toMatch(/bitty\.ui\.mount/);
+    expect(code).not.toMatch(/bitty\.ui\.update/);
     expect(code).not.toMatch(/bitty\.terminal/);
     expect(code).not.toMatch(/bitty\.selection/);
     expect(code).not.toMatch(/bitty\.store/);
     expect(code).not.toMatch(/bitty\.process/);
     expect(code).not.toMatch(/bitty\.events/);
+    expect(code).not.toMatch(/bitty\.workspace/);
+    expect(code).not.toMatch(/bitty\.panel/);
     expect(code).not.toMatch(/\brequire\s*\(/);
     expect(code).not.toMatch(/dofile|loadfile|loadstring/);
   });

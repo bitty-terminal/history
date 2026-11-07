@@ -2,7 +2,7 @@
 #
 # W-137 S-3 (CTX-0003) public-API-only policy package over the accepted
 # RFC-0004/W-131/W-137 contracts. The plugin consumes exactly three additive
-# v2 capabilities and no private surface: `history.transcript.read`
+# v2 read capabilities and no private surface: `history.transcript.read`
 # (scoped snapshot reads over sealed transcript segments while opt-in
 # capture holds), `history.commands.read` (scoped list/search/tail reads
 # over command history), and `history.kv.read` (own-namespace KV snapshot
@@ -13,6 +13,11 @@
 # stays a separately granted authority outside this family. No
 # session-snapshot access exists: save/restore stays Core-only per W-137,
 # and `session`/`snapshot` sources fail closed.
+#
+# The fourth grant, `ui.overlay.focus`, is presentation only: it is the one
+# surface that can paint a queried page (bitty#2967). Without it a query
+# answers `{ok, code}` and has nowhere to render. It carries no read,
+# export, input, or Terminal Truth authority of its own.
 #
 # `just manifest` validates this file with the authoritative `bitty-plugin-lint`
 # from bitty-plugin-sdk (R-SDK-2), pinned by commit in `package.json` and
@@ -56,20 +61,30 @@ max_bytes = { type = "int", default = 4096 }
 
 [capabilities]
 # Deny by default; each capability is requested one by one. This is the exact
-# public set the RFC-0004 family proposes for this keeper; nothing else is
-# declared or used.
+# public set the RFC-0004 family proposes for this keeper plus the single
+# presentation grant the answer needs; nothing else is declared or used.
 # - history.transcript.read: scoped snapshot reads over sealed transcript
 #   segments while opt-in capture holds (RFC-0004 source table).
 # - history.commands.read: scoped list, search, and tail reads over command
 #   history with explicit scope and result bound.
 # - history.kv.read: reads of the plugin's own KV namespace only under the
 #   published quota ceilings; cross-plugin reads are unrepresentable.
+# - ui.overlay.focus (accepted W-01 overlay-input-capture contract): the
+#   focusable overlay is the only surface that can present a queried page.
+#   `bitty.ui.overlay.acquire` mounts it and starts the Core-owned capture,
+#   `bitty.ui.overlay.update` replaces the scene with the painted rows, and
+#   Core owns `Esc`/focus-switch/idle revocation. The spec-acquire path needs
+#   only this grant (no v1 `ui.rich`/`ui.overlay` slot gate), and the grant
+#   carries no filesystem, process, network, clipboard, terminal-input, or
+#   Terminal Truth authority. Release stays ungated so cleanup never wedges
+#   input.
 # No export capability (clipboard.write, fs, process) is declared: the
 # history grant never implies export per the RFC-0004 grant-combination
 # rule, and session snapshots are never a queryable source per W-137.
 history.transcript.read = true
 history.commands.read = true
 history.kv.read = true
+ui.overlay.focus = true
 
 [lazy]
 # Static triggers let the host register the plugin without creating a VM.
