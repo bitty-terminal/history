@@ -17,6 +17,14 @@ labeled `untrusted-observation`, or replaced by a typed denial. The plugin
 never streams, holds no cursor across calls, and never reads session
 snapshots.
 
+Open a page with `bitty-terminal.history:query-transcript` (or
+`query-commands` / `query-kv`); the plugin installs no default chord. For
+example, run `bitty-terminal.history:query-transcript` with
+`{ scope = { panel = "<panel-id>" }, op = "tail", row_count = 10 }` and the
+focusable overlay opens with up to ten of that panel's most recent transcript
+rows under a `History: transcript` title. `Esc` closes the overlay; the next
+query opens a fresh one.
+
 ## Install
 
 Prerequisites:
@@ -119,7 +127,7 @@ History registers no default keybindings. Bind a chord in
 return {
   keymaps = {
     {
-      chord = "ctrl+shift+h",
+      chord = "ctrl+alt+h",
       action = "command:bitty-terminal.history:query-transcript",
       context = "global",
     },
